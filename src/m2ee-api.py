@@ -1,7 +1,8 @@
 #!/usr/bin/python
 import os
 import m2ee
-from flask import Flask, request
+import subprocess
+from flask import Flask, request, jsonify
 from werkzeug import secure_filename
 
 class REST():
@@ -12,6 +13,9 @@ class REST():
         self.upload_folder = os.path.expanduser('~/data/model-upload')
 
     def run(self):
+        if not os.path.exists(os.path.expanduser('~/.nginx.pid')):
+            subprocess.call(["/usr/sbin/nginx", "-c", os.path.expanduser('~/nginx.conf')])
+
         self.app.add_url_rule("/", 'index', self.index)
         self.app.add_url_rule("/about/", 'about', self.about)
         self.app.add_url_rule("/status/", 'status', self.status)
@@ -22,6 +26,7 @@ class REST():
         self.app.add_url_rule("/upload/", 'upload', self.upload, methods=['POST'])
         self.app.add_url_rule("/unpack/", 'unpack', self.unpack, methods=['POST'])
         self.app.add_url_rule("/emptydb/", 'emptydb', self.emptydb, methods=['POST'])
+        self.app.add_url_rule("/config/", 'config', self.config, methods=['GET', 'POST'])
         self.app.debug = True
         self.app.run(host='0.0.0.0')
 
@@ -144,7 +149,19 @@ class REST():
         (pid_alive, m2ee_alive) = self.m2ee.check_alive()
         if pid_alive or m2ee_alive:
             return self.say("The app is still running, refusing to unpack.")
+
         self.m2ee.unpack('model.mda')
+
+        mxversion = self.m2ee.config.get_runtime_version()
+        version = str(mxversion)
+        if not self.m2ee.config.lookup_in_mxjar_repo(version):
+            if not self.m2ee.config.get_first_writable_mxjar_repo():
+                return self.say("Runtime is not present and can't be saved anywhere.")
+            self.m2ee.download_and_unpack_runtime(version)
+
+            self.m2ee.unpack('model.mda')
+            return self.say('Runtime downloaded and Model unpacked.')
+
         return self.say('Model unpacked.')
 
     def emptydb(self):
@@ -157,6 +174,23 @@ class REST():
 
         m2ee.pgutil.emptydb(self.m2ee.config)
         return self.say("Database is emtpy now.")
+
+    def config(self):
+        if request.method == 'GET':
+            return jsonify(self.m2ee.config._conf['mxruntime'])
+
+        configs = [
+            'DatabaseHost',
+            'DatabaseName',
+            'DatabaseUserName',
+            'DatabasePassword',
+            'DatabaseType',
+            'MicroflowConstants'
+        ]
+        for key in configs:
+            if key in request.form:
+                self.m2ee.config._conf['mxruntime'][key] = request.form[key]
+        return self.say("Config set.")
 
 
 app = Flask(__name__)
