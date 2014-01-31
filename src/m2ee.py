@@ -109,15 +109,18 @@ class CLI(cmd.Cmd):
                         "download_runtime command.")
             return
 
-        if not self.m2ee.start_appcontainer():
+        (pid_alive, m2ee_alive) = self.m2ee.check_alive()
+        if pid_alive or m2ee_alive:
+            logger.error("The application process is already started!")
             return
 
-        database_password = None
-        if not self.m2ee.config.has_database_password():
-            database_password = getpass.getpass(
-                "Database password not configured, "
-                "please provide now:"
-            )
+        while not self.m2ee.start_appcontainer():
+            binary = self._ask_user_to_use_different_javabin()
+            if binary:
+                self.m2ee.config.set_javabin(binary)
+            else:
+                return
+
         if not self.m2ee.send_runtime_config(database_password):
             self._stop()
             return
@@ -158,6 +161,37 @@ class CLI(cmd.Cmd):
 
         if abort:
             self._stop()
+
+    def _ask_user_to_use_different_javabin(self):
+        answer = None
+        while answer == None:
+            print('')
+            print('Try to start with a different Java binary?')
+            print('(You can set this permanently using the "javabin" '
+                  'option in your m2ee.yaml)')
+            alternatives = subprocess.Popen(
+                               ['update-alternatives', '--list', 'java'],
+                               stdout=subprocess.PIPE)
+            alternatives.wait()
+            javabinarys = alternatives.stdout.read().splitlines()
+
+            print "0. No!"
+            for idx, binary in enumerate(javabinarys):
+                print "%s. %s" % (idx+1, binary)
+            answer = raw_input("")
+
+            try:
+                answer = int(answer)
+                if answer < 0 or answer > len(javabinarys):
+                    raise ValueError
+            except ValueError:
+                logger.error("Invalid input")
+                answer = None
+
+            if answer == 0:
+                return
+
+        return javabinarys[int(answer)-1]
 
     def _ask_user_whether_to_create_db(self):
         answer = None
